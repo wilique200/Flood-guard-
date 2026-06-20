@@ -11,6 +11,21 @@
 # ============================================================
 
 import streamlit as st
+
+
+def html(markup: str):
+    """
+    Renders raw HTML via st.markdown, safely.
+
+    Markdown treats ANY line indented 4+ spaces as a code block. Multi-line
+    f-strings written with Python-level indentation (for readability in the
+    source file) trigger this unintentionally — every line's leading
+    whitespace survives into the string. This strips leading whitespace
+    from every line before rendering, so visual indentation in the source
+    code never leaks into the rendered output.
+    """
+    flattened = "\n".join(line.lstrip() for line in markup.split("\n"))
+    st.markdown(flattened, unsafe_allow_html=True)
 import torch
 import torch.nn as nn
 import numpy as np
@@ -37,7 +52,7 @@ st.set_page_config(
 # ══════════════════════════════════════════════════════════════
 # GLOBAL STYLES — dark navy "Crisis Operations Center" aesthetic
 # ══════════════════════════════════════════════════════════════
-st.markdown("""
+html("""
 <style>
 @import url('https://fonts.googleapis.com/css2?family=JetBrains+Mono:wght@400;600;700&family=Inter:wght@300;400;500;600;700&display=swap');
 
@@ -93,7 +108,7 @@ hr { border-color:#1E2A40; }
     border:1px solid rgba(34,197,94,0.3); border-radius:6px; padding:4px 10px;
     font-family:'JetBrains Mono',monospace; font-size:10px; color:#22C55E; }
 </style>
-""", unsafe_allow_html=True)
+""")
 
 
 # ══════════════════════════════════════════════════════════════
@@ -604,25 +619,24 @@ def render_gauge_svg(prob, color):
     large = 1 if pct_arc > 0.5 else 0
     ex = 18 + 72*math.cos(math.radians(-90+pct_arc*180))
     ey = 95 - 72*math.sin(math.radians(-90+pct_arc*180))
-    return f"""
-    <div style="display:flex;justify-content:center;">
-    <svg viewBox="0 0 180 110" width="200" height="115" overflow="visible">
-      <defs><linearGradient id="gFill" x1="0%" y1="0%" x2="100%" y2="0%">
-        <stop offset="0%" stop-color="#22C55E"/><stop offset="35%" stop-color="#EAB308"/>
-        <stop offset="65%" stop-color="#F97316"/><stop offset="100%" stop-color="{color}"/>
-      </linearGradient></defs>
-      <path d="M18 95 A72 72 0 0 1 162 95" fill="none" stroke="#1E2A40" stroke-width="13" stroke-linecap="round"/>
-      <path d="M18 95 A72 72 0 {large} 1 {ex:.1f} {ey:.1f}" fill="none" stroke="url(#gFill)" stroke-width="13" stroke-linecap="round"/>
-      <line x1="90" y1="95" x2="{nx:.1f}" y2="{ny:.1f}" stroke="{color}" stroke-width="2.5" stroke-linecap="round"/>
-      <circle cx="90" cy="95" r="5" fill="{color}"/>
-      <circle cx="{nx:.1f}" cy="{ny:.1f}" r="4.5" fill="{color}" opacity="0.9"/>
-      <text x="90" y="88" text-anchor="middle" font-family="JetBrains Mono" font-size="22"
-            font-weight="700" fill="{color}">{prob*100:.0f}%</text>
-    </svg></div>"""
+    svg_html = f"""<div style="display:flex;justify-content:center;">
+<svg viewBox="0 0 180 110" width="200" height="115" overflow="visible">
+<defs><linearGradient id="gFill" x1="0%" y1="0%" x2="100%" y2="0%">
+<stop offset="0%" stop-color="#22C55E"/><stop offset="35%" stop-color="#EAB308"/>
+<stop offset="65%" stop-color="#F97316"/><stop offset="100%" stop-color="{color}"/>
+</linearGradient></defs>
+<path d="M18 95 A72 72 0 0 1 162 95" fill="none" stroke="#1E2A40" stroke-width="13" stroke-linecap="round"/>
+<path d="M18 95 A72 72 0 {large} 1 {ex:.1f} {ey:.1f}" fill="none" stroke="url(#gFill)" stroke-width="13" stroke-linecap="round"/>
+<line x1="90" y1="95" x2="{nx:.1f}" y2="{ny:.1f}" stroke="{color}" stroke-width="2.5" stroke-linecap="round"/>
+<circle cx="90" cy="95" r="5" fill="{color}"/>
+<circle cx="{nx:.1f}" cy="{ny:.1f}" r="4.5" fill="{color}" opacity="0.9"/>
+<text x="90" y="88" text-anchor="middle" font-family="JetBrains Mono" font-size="22" font-weight="700" fill="{color}">{prob*100:.0f}%</text>
+</svg></div>"""
+    return svg_html
 
 
 def render_hero(location_name, coords, risk_label, risk_color, risk_icon, prob):
-    st.markdown(f"""
+    html(f"""
     <div class="hero-section">
       <div style="display:flex;justify-content:space-between;align-items:flex-start;">
         <div>
@@ -641,7 +655,7 @@ def render_hero(location_name, coords, risk_label, risk_color, risk_icon, prob):
                       letter-spacing:2px;margin-top:2px;">{risk_icon} {risk_label}</div>
         </div>
       </div>
-    </div>""", unsafe_allow_html=True)
+    </div>""")
 
 
 def render_alert_banner(risk_label, risk_color, location_name, pred, bucket_map):
@@ -655,9 +669,9 @@ def render_alert_banner(risk_label, risk_color, location_name, pred, bucket_map)
     }
     rc  = risk_color.lstrip("#")
     bg  = f"rgba({int(rc[0:2],16)},{int(rc[2:4],16)},{int(rc[4:6],16)},0.12)"
-    st.markdown(f"""<div style="background:{bg};border:1px solid {risk_color}44;border-radius:10px;
+    html(f"""<div style="background:{bg};border:1px solid {risk_color}44;border-radius:10px;
         padding:12px 18px;margin-bottom:16px;"><span style="color:{risk_color};font-weight:600;">
-        {msgs.get(risk_label,'')}</span></div>""", unsafe_allow_html=True)
+        {msgs.get(risk_label,'')}</span></div>""")
 
 
 def render_ai_insight(pred, rain_info, risk_label, risk_color, location_name, bucket_map):
@@ -702,13 +716,13 @@ def render_ai_insight(pred, rain_info, risk_label, risk_color, location_name, bu
         f"padding:3px 9px;border-radius:4px;margin-right:6px;margin-bottom:4px;"
         f"display:inline-block;'>{c}</span>" for c in chips])
 
-    st.markdown(f"""<div class="ai-card">
+    html(f"""<div class="ai-card">
       <div style="font-family:'JetBrains Mono',monospace;font-size:10px;color:#38BDF8;
                   letter-spacing:1.5px;text-transform:uppercase;margin-bottom:8px;">
         🤖 FloodGuard AI Insight</div>
       <div style="font-size:13.5px;color:#CBD5E1;line-height:1.6;">{insight}</div>
       <div style="margin-top:10px;">{chip_html}</div>
-    </div>""", unsafe_allow_html=True)
+    </div>""")
 
 
 def render_env_indicators(rain_info, pred):
@@ -726,12 +740,12 @@ def render_env_indicators(rain_info, pred):
     ]
     for name, val, unit, bar_pct, bar_color in tiles:
         bar_w = int(bar_pct*100)
-        st.markdown(f"""<div class="env-tile"><div class="env-name">{name}</div>
+        html(f"""<div class="env-tile"><div class="env-name">{name}</div>
             <div class="env-value">{val}<span style="font-size:11px;color:#64748B;
                 font-weight:400;margin-left:3px;">{unit}</span></div>
             <div style="height:3px;background:#1E2A40;border-radius:2px;margin-top:7px;">
                 <div style="width:{bar_w}%;height:100%;background:{bar_color};
-                    border-radius:2px;"></div></div></div>""", unsafe_allow_html=True)
+                    border-radius:2px;"></div></div></div>""")
 
 
 def render_rainfall_chart(rain_info):
@@ -785,17 +799,17 @@ def render_days_bucket_chart(pred, bucket_map):
 
 def render_neighbourhood_alerts(user_pt, prop_alerts, grid_results):
     if not prop_alerts:
-        st.markdown("""<div style="background:rgba(34,197,94,0.1);border:1px solid rgba(34,197,94,0.3);
+        html("""<div style="background:rgba(34,197,94,0.1);border:1px solid rgba(34,197,94,0.3);
             border-radius:8px;padding:12px 16px;color:#22C55E;font-family:'JetBrains Mono',monospace;
             font-size:12px;">✅ No high-risk zones detected in your neighbourhood.
-            Your location appears safe from upstream flood propagation.</div>""", unsafe_allow_html=True)
+            Your location appears safe from upstream flood propagation.</div>""")
         return
 
     for alert in prop_alerts:
         color = alert["color"]
         rc = color.lstrip("#")
         rgba = f"{int(rc[0:2],16)},{int(rc[2:4],16)},{int(rc[4:6],16)}"
-        st.markdown(f"""<div style="background:rgba({rgba},0.1);border:1px solid {color}44;
+        html(f"""<div style="background:rgba({rgba},0.1);border:1px solid {color}44;
             border-radius:8px;padding:12px 16px;margin-bottom:8px;">
             <div style="font-family:'JetBrains Mono',monospace;font-size:11px;color:{color};
                 font-weight:700;margin-bottom:4px;">⚠️ {alert['label']} zone {alert['dist_km']}km to your {alert['direction'].upper()}</div>
@@ -804,7 +818,7 @@ def render_neighbourhood_alerts(user_pt, prop_alerts, grid_results):
                 Elevation: <b>+{alert['elev_diff']}m above you</b><br>
                 Water flow toward your location could increase your flood risk
                 by an estimated <b style="color:{color}">+{alert['factor']*100:.0f}%</b>.
-            </div></div>""", unsafe_allow_html=True)
+            </div></div>""")
 
     high_risk = [r for r in grid_results if not r["is_centre"] and r["prob"] > 0.20]
     high_risk.sort(key=lambda x: -x["prob"])
@@ -824,7 +838,7 @@ def render_neighbourhood_alerts(user_pt, prop_alerts, grid_results):
                 f"border-radius:3px;'>{r['label']}</span></td>"
                 f"<td style='padding:6px 10px;color:#64748B;'>{r['elev']}m</td></tr>"
             )
-        st.markdown(f"""<table style="width:100%;border-collapse:collapse;font-size:12px;">
+        html(f"""<table style="width:100%;border-collapse:collapse;font-size:12px;">
             <thead><tr style="border-bottom:1px solid #1E2A40;">
               <th style="padding:6px 10px;color:#64748B;text-align:left;font-family:monospace;
                   font-size:10px;text-transform:uppercase;">Direction</th>
@@ -836,7 +850,7 @@ def render_neighbourhood_alerts(user_pt, prop_alerts, grid_results):
                   font-size:10px;text-transform:uppercase;">Risk</th>
               <th style="padding:6px 10px;color:#64748B;text-align:left;font-family:monospace;
                   font-size:10px;text-transform:uppercase;">Elevation</th>
-            </tr></thead><tbody>{table_rows}</tbody></table>""", unsafe_allow_html=True)
+            </tr></thead><tbody>{table_rows}</tbody></table>""")
 
 
 # ══════════════════════════════════════════════════════════════
@@ -845,7 +859,7 @@ def render_neighbourhood_alerts(user_pt, prop_alerts, grid_results):
 
 def render_sidebar():
     with st.sidebar:
-        st.markdown("""
+        html("""
         <div style="text-align:center;padding:16px 0 24px;">
           <div style="font-size:32px;">🌊</div>
           <div style="font-family:'JetBrains Mono',monospace;font-size:18px;font-weight:700;
@@ -854,16 +868,16 @@ def render_sidebar():
                       letter-spacing:1px;margin-top:4px;">FLOOD RISK INTELLIGENCE</div>
         </div>
         <hr style="border-color:#1E2A40;margin-bottom:20px;">
-        """, unsafe_allow_html=True)
+        """)
 
         location_input = st.text_input("📍 Enter location", placeholder="e.g. Lagos, Nigeria",
                                         help="City name, neighbourhood, or landmark")
         run_analysis = st.button("🔍 Analyse Flood Risk")
 
         st.markdown("<hr style='border-color:#1E2A40;margin:20px 0;'>", unsafe_allow_html=True)
-        st.markdown("""<div style="font-family:'JetBrains Mono',monospace;font-size:10px;
+        html("""<div style="font-family:'JetBrains Mono',monospace;font-size:10px;
             color:#64748B;letter-spacing:1px;text-transform:uppercase;margin-bottom:10px;">
-            Settings</div>""", unsafe_allow_html=True)
+            Settings</div>""")
 
         neighbourhood = st.toggle("🗺️ Neighbourhood Analysis", value=True,
                                    help="Evaluate 25 grid points around your location")
@@ -872,25 +886,23 @@ def render_sidebar():
             help="Switch between dashboard grid view and interactive street map")
 
         st.markdown("<hr style='border-color:#1E2A40;margin:20px 0;'>", unsafe_allow_html=True)
-        st.markdown("""<div style="font-family:'JetBrains Mono',monospace;font-size:10px;
+        html("""<div style="font-family:'JetBrains Mono',monospace;font-size:10px;
             color:#64748B;letter-spacing:1px;text-transform:uppercase;margin-bottom:10px;">
-            Risk Scale</div>""", unsafe_allow_html=True)
+            Risk Scale</div>""")
         for (lo, hi), (label, color, icon) in RISK_LEVELS.items():
-            st.markdown(f"""<div style="display:flex;align-items:center;gap:8px;margin-bottom:6px;">
+            html(f"""<div style="display:flex;align-items:center;gap:8px;margin-bottom:6px;">
                 <div style="width:12px;height:12px;border-radius:2px;background:{color};
                     flex-shrink:0;"></div>
                 <div style="font-family:'JetBrains Mono',monospace;font-size:11px;color:#94A3B8;">
-                    {icon} {label} ({int(lo*100)}–{int(hi*100)}%)</div></div>""",
-                unsafe_allow_html=True)
+                    {icon} {label} ({int(lo*100)}–{int(hi*100)}%)</div></div>""")
 
         st.markdown("<hr style='border-color:#1E2A40;margin:20px 0;'>", unsafe_allow_html=True)
-        st.markdown("""<div style="text-align:center;">
+        html("""<div style="text-align:center;">
             <span class="validation-badge">✅ Validated on 31 real events</span></div>
             <div style="font-family:'JetBrains Mono',monospace;font-size:9px;color:#475569;
                 text-align:center;line-height:1.6;margin-top:10px;">
             Data: Open-Meteo APIs<br>Model: Multi-task DNN, v4<br>
-            140 cities · 2000–2020 training<br>Operating threshold: 0.70</div>""",
-            unsafe_allow_html=True)
+            140 cities · 2000–2020 training<br>Operating threshold: 0.70</div>""")
 
     return location_input, run_analysis, neighbourhood, map_mode
 
@@ -908,7 +920,7 @@ def main():
     location_input, run_analysis, neighbourhood, map_mode = render_sidebar()
 
     if not run_analysis or not location_input.strip():
-        st.markdown("""
+        html("""
         <div style="text-align:center;padding:80px 20px;">
           <div style="font-size:56px;margin-bottom:16px;">🌊</div>
           <div style="font-family:'JetBrains Mono',monospace;font-size:28px;font-weight:700;
@@ -928,7 +940,7 @@ def main():
                 padding:16px 20px;font-family:monospace;font-size:12px;color:#64748B;">
                 ✅ Validated on 31 real events</div>
           </div>
-        </div>""", unsafe_allow_html=True)
+        </div>""")
         return
 
     with st.spinner(f"📍 Locating {location_input}…"):
@@ -965,18 +977,17 @@ def main():
         with col_ai:
             render_ai_insight(pred, rain_info, risk_label, risk_color, name, bucket_map)
         with col_gauge:
-            st.markdown(f"""<div class="fg-card" style="text-align:center;">
+            html(f"""<div class="fg-card" style="text-align:center;">
                 <div class="fg-card-label">Risk Index</div>
                 {render_gauge_svg(pred['flood_prob'], risk_color)}
                 <div style="font-family:'JetBrains Mono',monospace;font-size:11px;
                     color:{risk_color};letter-spacing:1px;text-transform:uppercase;
-                    margin-top:4px;">{risk_icon} {risk_label}</div></div>""",
-                unsafe_allow_html=True)
+                    margin-top:4px;">{risk_icon} {risk_label}</div></div>""")
 
         col_env, col_charts = st.columns([1, 2])
         with col_env:
-            st.markdown("""<div class="fg-card-label" style="margin-bottom:8px;">
-                Environmental Indicators</div>""", unsafe_allow_html=True)
+            html("""<div class="fg-card-label" style="margin-bottom:8px;">
+                Environmental Indicators</div>""")
             render_env_indicators(rain_info, pred)
         with col_charts:
             render_rainfall_chart(rain_info)
@@ -1002,8 +1013,8 @@ def main():
         if not neighbourhood:
             st.info("Enable 'Neighbourhood Analysis' in the sidebar to use this feature.")
         else:
-            st.markdown(f"""<div class="fg-card-label">Analysing 25 grid points in a
-                84km radius around {name}</div>""", unsafe_allow_html=True)
+            html(f"""<div class="fg-card-label">Analysing 25 grid points in a
+                84km radius around {name}</div>""")
 
             with st.spinner("🗺️ Running neighbourhood flood analysis…"):
                 grid = analyse_neighbourhood(lat, lon, model, scaler, feature_cols, threshold)
@@ -1013,22 +1024,20 @@ def main():
             use_folium = "Folium" in map_mode
 
             if use_folium:
-                st.markdown("""<div style="font-family:'JetBrains Mono',monospace;font-size:10px;
+                html("""<div style="font-family:'JetBrains Mono',monospace;font-size:10px;
                     color:#38BDF8;letter-spacing:1px;margin-bottom:8px;">
-                    🗺️ INTERACTIVE STREET MAP — Click markers for details</div>""",
-                    unsafe_allow_html=True)
+                    🗺️ INTERACTIVE STREET MAP — Click markers for details</div>""")
                 st_folium(build_folium_map(grid, name, lat, lon), width=None, height=500)
             else:
-                st.markdown("""<div style="font-family:'JetBrains Mono',monospace;font-size:10px;
+                html("""<div style="font-family:'JetBrains Mono',monospace;font-size:10px;
                     color:#38BDF8;letter-spacing:1px;margin-bottom:8px;">
-                    📊 DASHBOARD GRID — Hover points for details</div>""",
-                    unsafe_allow_html=True)
+                    📊 DASHBOARD GRID — Hover points for details</div>""")
                 st.plotly_chart(build_plotly_map(grid, name), use_container_width=True)
 
             st.markdown("---")
-            st.markdown("""<div style="font-family:'JetBrains Mono',monospace;font-size:11px;
+            html("""<div style="font-family:'JetBrains Mono',monospace;font-size:11px;
                 color:#64748B;letter-spacing:1px;text-transform:uppercase;margin-bottom:12px;">
-                ⚡ Flood Propagation Risk Assessment</div>""", unsafe_allow_html=True)
+                ⚡ Flood Propagation Risk Assessment</div>""")
             render_neighbourhood_alerts(user_pt, prop_alerts, grid)
 
             st.markdown("---")
@@ -1082,7 +1091,7 @@ def main():
 
     # ══════════ TAB 4: ABOUT ══════════
     with tab4:
-        st.markdown("""
+        html("""
         <div class="fg-card">
           <div class="fg-card-label">About FloodGuard</div>
           <p style="color:#94A3B8;line-height:1.7;font-size:14px;">
@@ -1191,7 +1200,7 @@ def main():
                 meteorological warnings.</li>
           </ul>
         </div>
-        """, unsafe_allow_html=True)
+        """)
 
 
 if __name__ == "__main__":
