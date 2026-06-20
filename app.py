@@ -193,7 +193,7 @@ def load_model():
     model_path = Path("models/floodguard_best_model_v4.pt")
     if not model_path.exists():
         return None, None, None, None, None
-    checkpoint   = torch.load(model_path, map_location="cpu")
+    checkpoint   = torch.load(model_path, map_location="cpu", weights_only=False)
     feature_cols = checkpoint["feature_cols"]
     input_dim    = checkpoint["input_dim"]
     threshold    = checkpoint["threshold"]
