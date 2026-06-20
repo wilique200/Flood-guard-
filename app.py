@@ -226,17 +226,38 @@ def load_model():
 
 @st.cache_data(ttl=3600)
 def geocode(location_str):
-    try:
-        url = "https://nominatim.openstreetmap.org/search"
-        params = {"q": location_str, "format": "json", "limit": 1}
-        headers = {"User-Agent": "FloodGuard/2.0"}
-        resp = requests.get(url, params=params, headers=headers, timeout=10)
-        data = resp.json()
-        if data:
-            return {"lat": float(data[0]["lat"]), "lon": float(data[0]["lon"]),
-                    "display_name": data[0]["display_name"], "found": True}
-    except Exception:
-        pass
+    """
+    Geocodes via Nominatim (OpenStreetMap). Two attempts:
+      1. The query exactly as typed (after trimming stray whitespace —
+         a trailing/leading space in the raw input can cause Nominatim
+         to fail a match it would otherwise find).
+      2. If that returns nothing, a relaxed retry (limit raised from 1
+         to 5, taking the first result) — small towns sometimes only
+         match with a slightly less strict internal ranking pass.
+
+    Note: small, sparsely-mapped settlements can genuinely be absent
+    from OpenStreetMap's named-place index even when they're real,
+    populated places — this is a known, documented gap in OSM/Nominatim
+    coverage, not something any client-side fix can fully resolve.
+    Nominatim's usage policy also explicitly prohibits implementing
+    autocomplete against their public API, so suggestions-as-you-type
+    aren't available through this geocoding service.
+    """
+    location_str = location_str.strip()
+    headers = {"User-Agent": "FloodGuard/2.0"}
+    url = "https://nominatim.openstreetmap.org/search"
+
+    for limit in (1, 5):
+        try:
+            params = {"q": location_str, "format": "json", "limit": limit}
+            resp = requests.get(url, params=params, headers=headers, timeout=10)
+            data = resp.json()
+            if data:
+                return {"lat": float(data[0]["lat"]), "lon": float(data[0]["lon"]),
+                        "display_name": data[0]["display_name"], "found": True}
+        except Exception:
+            pass
+
     return {"found": False}
 
 
@@ -943,14 +964,23 @@ def main():
         </div>""")
         return
 
-    with st.spinner(f"📍 Locating {location_input}…"):
-        geo = geocode(location_input)
+    location_clean = location_input.strip()
+
+    with st.spinner(f"📍 Locating {location_clean}…"):
+        geo = geocode(location_clean)
     if not geo["found"]:
-        st.error(f"❌ Could not find '{location_input}'. Try a more specific name.")
+        st.error(f"❌ Could not find '{location_clean}'.")
+        st.markdown(
+            "Try adding a state/region or country (e.g. **'Itakpe, Kogi State, "
+            "Nigeria'** instead of just 'Itakpe') — small towns are sometimes "
+            "missing from the map database on their own, but resolve "
+            "successfully with more context. You can also try the nearest "
+            "larger city or LGA capital."
+        )
         return
 
     lat, lon = geo["lat"], geo["lon"]
-    name = location_input.strip().title()
+    name = location_clean.title()
 
     with st.spinner("📡 Fetching weather & soil data…"):
         w_data  = fetch_weather_data(lat, lon)
@@ -1016,9 +1046,23 @@ def main():
             html(f"""<div class="fg-card-label">Analysing 25 grid points in a
                 84km radius around {name}</div>""")
 
-            with st.spinner("🗺️ Running neighbourhood flood analysis…"):
-                grid = analyse_neighbourhood(lat, lon, model, scaler, feature_cols, threshold)
+            # Cache the grid in session_state, keyed on location. Without
+            # this, switching map style (Plotly <-> Folium) triggers a full
+            # Streamlit rerun — st_folium is a bidirectional component and
+            # registering/changing its return value causes one — and the
+            # entire 25-point live-API neighbourhood fetch would re-run from
+            # scratch every time, which looks and feels like the whole app
+            # restarting. Caching here means that fetch only happens once
+            # per location, and toggling map style just re-renders it.
+            grid_cache_key = f"grid_{round(lat,4)}_{round(lon,4)}"
+            if st.session_state.get("grid_cache_key") != grid_cache_key:
+                with st.spinner("🗺️ Running neighbourhood flood analysis…"):
+                    st.session_state["grid_data"] = analyse_neighbourhood(
+                        lat, lon, model, scaler, feature_cols, threshold
+                    )
+                st.session_state["grid_cache_key"] = grid_cache_key
 
+            grid = st.session_state["grid_data"]
             user_pt, neighbours = grid[0], grid[1:]
             prop_alerts = propagation_risk(user_pt, neighbours)
             use_folium = "Folium" in map_mode
@@ -1027,7 +1071,8 @@ def main():
                 html("""<div style="font-family:'JetBrains Mono',monospace;font-size:10px;
                     color:#38BDF8;letter-spacing:1px;margin-bottom:8px;">
                     🗺️ INTERACTIVE STREET MAP — Click markers for details</div>""")
-                st_folium(build_folium_map(grid, name, lat, lon), width=None, height=500)
+                st_folium(build_folium_map(grid, name, lat, lon), width=None, height=500,
+                          key="floodguard_folium_map")
             else:
                 html("""<div style="font-family:'JetBrains Mono',monospace;font-size:10px;
                     color:#38BDF8;letter-spacing:1px;margin-bottom:8px;">
