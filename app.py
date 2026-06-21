@@ -253,6 +253,29 @@ def get_local_storage():
     return st.session_state["_local_storage_instance"]
 
 
+def _ls_get(localS, key, widget_key):
+    """
+    Calls LocalStorage.getItem() defensively. The package's own README
+    documents getItem(key, key=widget_key) — but live deployment testing
+    showed the actually-installed 0.0.25 wheel raises TypeError on that
+    kwarg, meaning the published docs and the shipped package disagree.
+    Try the documented form first, fall back to the bare call so this
+    keeps working regardless of which signature is actually present.
+    """
+    try:
+        return localS.getItem(key, key=widget_key)
+    except TypeError:
+        return localS.getItem(key)
+
+
+def _ls_set(localS, key, value, widget_key):
+    """Same defensive pattern as _ls_get, for setItem()."""
+    try:
+        localS.setItem(key, value, key=widget_key)
+    except TypeError:
+        localS.setItem(key, value)
+
+
 def load_saved_locations():
     """
     Returns a list of saved-location dicts, or None if the browser
@@ -260,7 +283,7 @@ def load_saved_locations():
     None as "still loading," not "empty list").
     """
     localS = get_local_storage()
-    raw = localS.getItem(LOCAL_STORAGE_KEY, key="fg_get_locations")
+    raw = _ls_get(localS, LOCAL_STORAGE_KEY, "fg_get_locations")
     if raw is None:
         return None
     try:
@@ -271,7 +294,7 @@ def load_saved_locations():
 
 def save_locations_to_storage(locations):
     localS = get_local_storage()
-    localS.setItem(LOCAL_STORAGE_KEY, json.dumps(locations), key="fg_set_locations")
+    _ls_set(localS, LOCAL_STORAGE_KEY, json.dumps(locations), "fg_set_locations")
 
 
 def add_saved_location(locations, label, lat, lon):
