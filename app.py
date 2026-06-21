@@ -227,34 +227,49 @@ def load_model():
 @st.cache_data(ttl=3600)
 def geocode(location_str):
     """
-    Geocodes via Nominatim (OpenStreetMap). Two attempts:
-      1. The query exactly as typed (after trimming stray whitespace —
-         a trailing/leading space in the raw input can cause Nominatim
-         to fail a match it would otherwise find).
-      2. If that returns nothing, a relaxed retry (limit raised from 1
-         to 5, taking the first result) — small towns sometimes only
-         match with a slightly less strict internal ranking pass.
+    Geocodes via Open-Meteo's own Geocoding API
+    (https://geocoding-api.open-meteo.com/v1/search) — the same provider
+    already used elsewhere in this app for weather/discharge data, no API
+    key required, and no separate restrictive usage policy to navigate.
 
-    Note: small, sparsely-mapped settlements can genuinely be absent
-    from OpenStreetMap's named-place index even when they're real,
-    populated places — this is a known, documented gap in OSM/Nominatim
-    coverage, not something any client-side fix can fully resolve.
-    Nominatim's usage policy also explicitly prohibits implementing
-    autocomplete against their public API, so suggestions-as-you-type
-    aren't available through this geocoding service.
+    Switched away from Nominatim/OpenStreetMap after real-world testing
+    showed unreliable behaviour for this app's deployment environment —
+    Nominatim's public instance is also explicitly rate-limited to ~1
+    request/second and prohibits client-side autocomplete, which made it
+    a fragile single point of failure for a deployed app rather than a
+    quick prototyping convenience.
+
+    Tries the query as typed first; if that returns nothing, retries
+    with just the first comma-separated segment (e.g. "Itakpe, Kogi
+    State, Nigeria" -> "Itakpe") since Open-Meteo's matcher works best
+    on the place name itself rather than a full free-text address.
     """
     location_str = location_str.strip()
-    headers = {"User-Agent": "FloodGuard/2.0"}
-    url = "https://nominatim.openstreetmap.org/search"
+    url = "https://geocoding-api.open-meteo.com/v1/search"
 
-    for limit in (1, 5):
+    candidates = [location_str]
+    first_segment = location_str.split(",")[0].strip()
+    if first_segment and first_segment != location_str:
+        candidates.append(first_segment)
+
+    for query in candidates:
         try:
-            params = {"q": location_str, "format": "json", "limit": limit}
-            resp = requests.get(url, params=params, headers=headers, timeout=10)
+            params = {"name": query, "count": 5, "format": "json"}
+            resp = requests.get(url, params=params, timeout=10)
+            resp.raise_for_status()
             data = resp.json()
-            if data:
-                return {"lat": float(data[0]["lat"]), "lon": float(data[0]["lon"]),
-                        "display_name": data[0]["display_name"], "found": True}
+            results = data.get("results")
+            if results:
+                top = results[0]
+                parts = [top.get("name", "")]
+                if top.get("admin1"):
+                    parts.append(top["admin1"])
+                if top.get("country"):
+                    parts.append(top["country"])
+                return {
+                    "lat": float(top["latitude"]), "lon": float(top["longitude"]),
+                    "display_name": ", ".join(p for p in parts if p), "found": True,
+                }
         except Exception:
             pass
 
@@ -892,7 +907,7 @@ def render_sidebar():
         """)
 
         location_input = st.text_input("📍 Enter location", placeholder="e.g. Lagos, Nigeria",
-                                        help="City name, neighbourhood, or landmark")
+                                        help="City, town, or region name — add state/country for small towns")
         run_analysis = st.button("🔍 Analyse Flood Risk")
 
         st.markdown("<hr style='border-color:#1E2A40;margin:20px 0;'>", unsafe_allow_html=True)
@@ -1226,7 +1241,7 @@ def main():
             <li>River Discharge: <b>Open-Meteo Flood API</b> (GloFAS v4) — screened to
                 require ≥95% genuine data coverage per city before inclusion in training</li>
             <li>Flood Labels: <b>Dartmouth Flood Observatory (DFO)</b></li>
-            <li>Geocoding: <b>Nominatim / OpenStreetMap</b></li>
+            <li>Geocoding: <b>Open-Meteo Geocoding API</b></li>
             <li>Elevation: <b>Open-Elevation API</b></li>
           </ul>
         </div>
