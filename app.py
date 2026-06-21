@@ -38,6 +38,8 @@ from pathlib import Path
 import folium
 import plotly.graph_objects as go
 from streamlit_folium import st_folium
+from streamlit_local_storage import LocalStorage
+import json
 
 # ══════════════════════════════════════════════════════════════
 # PAGE CONFIG
@@ -218,6 +220,84 @@ def load_model():
     model.load_state_dict(checkpoint["model_state"])
     model.eval()
     return model, scaler, feature_cols, threshold, bucket_map
+
+
+# ══════════════════════════════════════════════════════════════
+# SAVED LOCATIONS — persisted in the user's BROWSER (localStorage)
+# ══════════════════════════════════════════════════════════════
+# Streamlit Cloud apps have no server-side database by default, and this
+# app has no login/account system. Browser localStorage is the right fit
+# for "let me save a few spots and check them again later" on a single
+# device, with zero backend infrastructure required — it survives app
+# restarts/redeploys because it lives on the USER's device, not ours.
+#
+# IMPORTANT LIMITATION, stated plainly: this does NOT enable push
+# notifications or background monitoring. The app only re-checks saved
+# locations when the user actually opens it — there is no way for a
+# Streamlit Cloud app to run code or send an alert while nobody has the
+# page open. What this DOES give you: every time you open the app, all
+# your saved locations are automatically re-evaluated against the live
+# model, and you see how each one's risk has changed since your last visit.
+#
+# KNOWN QUIRK (per the streamlit-local-storage library's own docs/issues):
+# getItem() does not return synchronously on the very first script run
+# after a fresh page load — the value lands in st.session_state on a
+# follow-up rerun. The loader below handles that by treating "not yet
+# loaded" as its own distinct state, not as "empty."
+
+LOCAL_STORAGE_KEY = "floodguard_saved_locations"
+
+def get_local_storage():
+    if "_local_storage_instance" not in st.session_state:
+        st.session_state["_local_storage_instance"] = LocalStorage()
+    return st.session_state["_local_storage_instance"]
+
+
+def load_saved_locations():
+    """
+    Returns a list of saved-location dicts, or None if the browser
+    hasn't returned a value yet (first-run quirk — caller should treat
+    None as "still loading," not "empty list").
+    """
+    localS = get_local_storage()
+    raw = localS.getItem(LOCAL_STORAGE_KEY, key="fg_get_locations")
+    if raw is None:
+        return None
+    try:
+        return json.loads(raw) if isinstance(raw, str) else raw
+    except (json.JSONDecodeError, TypeError):
+        return []
+
+
+def save_locations_to_storage(locations):
+    localS = get_local_storage()
+    localS.setItem(LOCAL_STORAGE_KEY, json.dumps(locations), key="fg_set_locations")
+
+
+def add_saved_location(locations, label, lat, lon):
+    locations = list(locations)
+    locations.append({
+        "label": label, "lat": lat, "lon": lon,
+        "last_prob": None, "last_severity": None, "last_checked_at": None,
+    })
+    save_locations_to_storage(locations)
+    return locations
+
+
+def remove_saved_location(locations, index):
+    locations = [l for i, l in enumerate(locations) if i != index]
+    save_locations_to_storage(locations)
+    return locations
+
+
+def update_saved_location_result(locations, index, prob, severity):
+    locations = list(locations)
+    locations[index] = {
+        **locations[index],
+        "last_prob": prob, "last_severity": severity,
+        "last_checked_at": datetime.utcnow().isoformat(),
+    }
+    return locations
 
 
 # ══════════════════════════════════════════════════════════════
@@ -647,14 +727,18 @@ def build_folium_map(grid_results, user_name, user_lat, user_lon):
 # ══════════════════════════════════════════════════════════════
 
 def render_gauge_svg(prob, color):
-    angle = -90 + prob*180
-    rad   = math.radians(angle)
-    nx = 90 + 72*math.cos(rad)
-    ny = 95 - 72*math.sin(rad)
-    pct_arc = prob
-    large = 1 if pct_arc > 0.5 else 0
-    ex = 18 + 72*math.cos(math.radians(-90+pct_arc*180))
-    ey = 95 - 72*math.sin(math.radians(-90+pct_arc*180))
+    # Single source of truth: one point, computed once, used for BOTH the
+    # arc endpoint and the needle tip. The old version computed the needle
+    # around the arc's CENTER (90,95) but the arc endpoint around its LEFT
+    # EDGE (18,95) — same angle, wrong origin — so they diverged by a
+    # constant 72px (the radius) at every probability value.
+    cx, cy, r = 90, 95, 72
+    angle_deg = -180 + prob * 180   # 0% -> 180° (left baseline) ... 100% -> 0° (right baseline)
+    rad = math.radians(angle_deg)
+    px = cx + r * math.cos(rad)
+    py = cy + r * math.sin(rad)
+    large = 1 if prob > 0.5 else 0
+
     svg_html = f"""<div style="display:flex;justify-content:center;">
 <svg viewBox="0 0 180 110" width="200" height="115" overflow="visible">
 <defs><linearGradient id="gFill" x1="0%" y1="0%" x2="100%" y2="0%">
@@ -662,10 +746,10 @@ def render_gauge_svg(prob, color):
 <stop offset="65%" stop-color="#F97316"/><stop offset="100%" stop-color="{color}"/>
 </linearGradient></defs>
 <path d="M18 95 A72 72 0 0 1 162 95" fill="none" stroke="#1E2A40" stroke-width="13" stroke-linecap="round"/>
-<path d="M18 95 A72 72 0 {large} 1 {ex:.1f} {ey:.1f}" fill="none" stroke="url(#gFill)" stroke-width="13" stroke-linecap="round"/>
-<line x1="90" y1="95" x2="{nx:.1f}" y2="{ny:.1f}" stroke="{color}" stroke-width="2.5" stroke-linecap="round"/>
+<path d="M18 95 A72 72 0 {large} 1 {px:.1f} {py:.1f}" fill="none" stroke="url(#gFill)" stroke-width="13" stroke-linecap="round"/>
+<line x1="90" y1="95" x2="{px:.1f}" y2="{py:.1f}" stroke="{color}" stroke-width="2.5" stroke-linecap="round"/>
 <circle cx="90" cy="95" r="5" fill="{color}"/>
-<circle cx="{nx:.1f}" cy="{ny:.1f}" r="4.5" fill="{color}" opacity="0.9"/>
+<circle cx="{px:.1f}" cy="{py:.1f}" r="4.5" fill="{color}" opacity="0.9"/>
 <text x="90" y="88" text-anchor="middle" font-family="JetBrains Mono" font-size="22" font-weight="700" fill="{color}">{prob*100:.0f}%</text>
 </svg></div>"""
     return svg_html
@@ -947,6 +1031,148 @@ def render_sidebar():
 # MAIN APP
 # ══════════════════════════════════════════════════════════════
 
+def _evaluate_location(lat, lon, model, scaler, feature_cols, threshold):
+    """Runs the full fetch+predict pipeline for one saved location."""
+    w_data  = fetch_weather_data(lat, lon)
+    d_vals  = fetch_discharge_data(lat, lon)
+    elev    = get_elevation(lat, lon)
+    coastal = is_coastal(lat, lon)
+    feat_vec, rain_info = build_features(w_data, d_vals, elev, coastal, feature_cols)
+    if feat_vec is None:
+        return None
+    return predict(model, scaler, threshold, feat_vec)
+
+
+def _render_location_card(loc, idx, new_pred, on_remove_key):
+    """One saved-location card showing current risk + delta since last visit."""
+    risk_label, risk_color, risk_icon = get_risk_level(new_pred["flood_prob"])
+    old_prob = loc.get("last_prob")
+
+    if old_prob is not None:
+        delta = new_pred["flood_prob"] - old_prob
+        if abs(delta) < 0.02:
+            delta_text = "No real change since your last visit"
+            delta_color = "#64748B"
+        elif delta > 0:
+            delta_text = f"⬆ Risk rose {delta*100:.0f} points since your last visit"
+            delta_color = "#EF4444"
+        else:
+            delta_text = f"⬇ Risk fell {abs(delta)*100:.0f} points since your last visit"
+            delta_color = "#22C55E"
+    else:
+        delta_text = "First check for this location"
+        delta_color = "#64748B"
+
+    rc = risk_color.lstrip("#")
+    bg = f"rgba({int(rc[0:2],16)},{int(rc[2:4],16)},{int(rc[4:6],16)},0.08)"
+
+    html(f"""<div style="background:{bg};border:1px solid {risk_color}33;border-radius:12px;
+        padding:16px 18px;margin-bottom:12px;">
+        <div style="display:flex;justify-content:space-between;align-items:flex-start;">
+          <div>
+            <div style="font-size:16px;font-weight:700;color:#fff;">{loc['label']}</div>
+            <div style="font-family:'JetBrains Mono',monospace;font-size:10px;color:#64748B;
+                margin-top:2px;">{loc['lat']:.3f}°, {loc['lon']:.3f}°</div>
+          </div>
+          <div style="text-align:right;">
+            <div style="font-family:'JetBrains Mono',monospace;font-size:24px;font-weight:700;
+                color:{risk_color};">{new_pred['flood_prob']*100:.0f}%</div>
+            <div style="font-family:'JetBrains Mono',monospace;font-size:10px;color:{risk_color};
+                letter-spacing:1px;">{risk_icon} {risk_label}</div>
+          </div>
+        </div>
+        <div style="margin-top:10px;font-size:12px;color:{delta_color};font-weight:600;">
+            {delta_text}</div>
+    </div>""")
+
+    btn_col1, btn_col2 = st.columns([5,1])
+    with btn_col2:
+        if st.button("🗑️ Remove", key=on_remove_key):
+            return True
+    return False
+
+
+def render_my_locations_landing(saved_locations, model, scaler, feature_cols, threshold, bucket_map):
+    """Shown on the landing page (no active search) when saved locations exist."""
+    html(f"""<div style="text-align:center;padding:24px 20px 8px;">
+      <div style="font-size:40px;margin-bottom:8px;">📍</div>
+      <div style="font-family:'JetBrains Mono',monospace;font-size:20px;font-weight:700;
+          color:#fff;">Welcome back</div>
+      <div style="font-size:14px;color:#64748B;margin-top:4px;">
+          Checking {len(saved_locations)} saved location(s) for you…</div>
+    </div>""")
+
+    updated_locations = list(saved_locations)
+    indices_to_remove = []
+
+    for idx, loc in enumerate(saved_locations):
+        with st.spinner(f"Checking {loc['label']}…"):
+            new_pred = _evaluate_location(loc["lat"], loc["lon"], model, scaler,
+                                          feature_cols, threshold)
+        if new_pred is None:
+            st.warning(f"⚠️ Couldn't refresh {loc['label']} right now — showing last known data.")
+            continue
+
+        removed = _render_location_card(loc, idx, new_pred, on_remove_key=f"landing_remove_{idx}")
+        if removed:
+            indices_to_remove.append(idx)
+        else:
+            updated_locations[idx] = update_saved_location_result(
+                updated_locations, idx, new_pred["flood_prob"], new_pred["severity"])[idx]
+
+    if indices_to_remove:
+        updated_locations = [l for i, l in enumerate(updated_locations)
+                             if i not in indices_to_remove]
+        save_locations_to_storage(updated_locations)
+        st.rerun()
+    else:
+        save_locations_to_storage(updated_locations)
+
+    st.markdown("---")
+    st.caption("🔍 Search a new location above anytime — your saved spots will always be here when you return.")
+
+
+def render_my_locations_tab(saved_locations, current_already_saved_idx, model, scaler,
+                            feature_cols, threshold, bucket_map):
+    """The 'My Locations' tab, shown while viewing a searched location."""
+    html("""<div class="fg-card-label">Your Saved Locations</div>""")
+
+    if not saved_locations:
+        st.info("You haven't saved any locations yet. Use the **📍 Save Location** "
+                "button above to start tracking a spot — FloodGuard will re-check it "
+                "and show you how its risk has changed every time you open the app.")
+        return
+
+    st.caption(f"{len(saved_locations)} saved location(s) — re-checked live against "
+              f"current weather data.")
+
+    updated_locations = list(saved_locations)
+    indices_to_remove = []
+
+    for idx, loc in enumerate(saved_locations):
+        with st.spinner(f"Checking {loc['label']}…"):
+            new_pred = _evaluate_location(loc["lat"], loc["lon"], model, scaler,
+                                          feature_cols, threshold)
+        if new_pred is None:
+            st.warning(f"⚠️ Couldn't refresh {loc['label']} right now.")
+            continue
+
+        removed = _render_location_card(loc, idx, new_pred, on_remove_key=f"tab_remove_{idx}")
+        if removed:
+            indices_to_remove.append(idx)
+        else:
+            updated_locations[idx] = update_saved_location_result(
+                updated_locations, idx, new_pred["flood_prob"], new_pred["severity"])[idx]
+
+    if indices_to_remove:
+        updated_locations = [l for i, l in enumerate(updated_locations)
+                             if i not in indices_to_remove]
+        save_locations_to_storage(updated_locations)
+        st.rerun()
+    else:
+        save_locations_to_storage(updated_locations)
+
+
 def main():
     model, scaler, feature_cols, threshold, bucket_map = load_model()
     if model is None:
@@ -955,28 +1181,42 @@ def main():
 
     location_input, run_analysis, neighbourhood, map_mode = render_sidebar()
 
+    # Saved locations load from the BROWSER on every run — see the
+    # first-run "still loading" quirk noted in the storage section above.
+    saved_locations = load_saved_locations()
+    locations_still_loading = saved_locations is None
+    if locations_still_loading:
+        saved_locations = []
+
     if not run_analysis or not location_input.strip():
-        html("""
-        <div style="text-align:center;padding:80px 20px;">
-          <div style="font-size:56px;margin-bottom:16px;">🌊</div>
-          <div style="font-family:'JetBrains Mono',monospace;font-size:28px;font-weight:700;
-                      color:#fff;margin-bottom:8px;">Flood<span style="color:#38BDF8;">Guard</span></div>
-          <div style="font-size:16px;color:#64748B;max-width:480px;margin:0 auto;line-height:1.6;">
-            AI-powered flood risk intelligence. Enter any location to get real-time flood
-            probability, neighbourhood risk analysis, and early warning insights.
-          </div>
-          <div style="margin-top:32px;display:flex;gap:16px;justify-content:center;flex-wrap:wrap;">
-            <div style="background:#0F1623;border:1px solid #1E2A40;border-radius:10px;
-                padding:16px 20px;font-family:monospace;font-size:12px;color:#64748B;">
-                🎯 5 prediction targets</div>
-            <div style="background:#0F1623;border:1px solid #1E2A40;border-radius:10px;
-                padding:16px 20px;font-family:monospace;font-size:12px;color:#64748B;">
-                🗺️ 25-point neighbourhood grid</div>
-            <div style="background:#0F1623;border:1px solid #1E2A40;border-radius:10px;
-                padding:16px 20px;font-family:monospace;font-size:12px;color:#64748B;">
-                ✅ Validated on 31 real events</div>
-          </div>
-        </div>""")
+        if locations_still_loading:
+            st.info("⏳ Loading your saved locations…")
+            st.rerun()
+        elif saved_locations:
+            render_my_locations_landing(saved_locations, model, scaler,
+                                        feature_cols, threshold, bucket_map)
+        else:
+            html("""
+            <div style="text-align:center;padding:80px 20px;">
+              <div style="font-size:56px;margin-bottom:16px;">🌊</div>
+              <div style="font-family:'JetBrains Mono',monospace;font-size:28px;font-weight:700;
+                          color:#fff;margin-bottom:8px;">Flood<span style="color:#38BDF8;">Guard</span></div>
+              <div style="font-size:16px;color:#64748B;max-width:480px;margin:0 auto;line-height:1.6;">
+                AI-powered flood risk intelligence. Enter any location to get real-time flood
+                probability, neighbourhood risk analysis, and early warning insights.
+              </div>
+              <div style="margin-top:32px;display:flex;gap:16px;justify-content:center;flex-wrap:wrap;">
+                <div style="background:#0F1623;border:1px solid #1E2A40;border-radius:10px;
+                    padding:16px 20px;font-family:monospace;font-size:12px;color:#64748B;">
+                    🎯 5 prediction targets</div>
+                <div style="background:#0F1623;border:1px solid #1E2A40;border-radius:10px;
+                    padding:16px 20px;font-family:monospace;font-size:12px;color:#64748B;">
+                    🗺️ 25-point neighbourhood grid</div>
+                <div style="background:#0F1623;border:1px solid #1E2A40;border-radius:10px;
+                    padding:16px 20px;font-family:monospace;font-size:12px;color:#64748B;">
+                    ✅ Validated on 31 real events</div>
+              </div>
+            </div>""")
         return
 
     location_clean = location_input.strip()
@@ -1014,7 +1254,28 @@ def main():
     render_hero(name, (lat, lon), risk_label, risk_color, risk_icon, pred["flood_prob"])
     render_alert_banner(risk_label, risk_color, name, pred, bucket_map)
 
-    tab1, tab2, tab3, tab4 = st.tabs(["📊 Dashboard", "🗺️ Neighbourhood", "📈 Details", "ℹ️ About"])
+    # Save / update this location's button — sits right under the alert
+    # banner so it's visible without scrolling, regardless of which tab
+    # the user is on.
+    already_saved_idx = next((i for i, l in enumerate(saved_locations)
+                              if abs(l["lat"]-lat)<0.01 and abs(l["lon"]-lon)<0.01), None)
+    save_col1, save_col2 = st.columns([4, 1])
+    with save_col2:
+        if already_saved_idx is not None:
+            if st.button("📍 Saved ✓", key="already_saved_btn", disabled=True):
+                pass
+        else:
+            if st.button("📍 Save Location", key="save_loc_btn"):
+                updated = add_saved_location(saved_locations, name, lat, lon)
+                idx = len(updated) - 1
+                updated = update_saved_location_result(
+                    updated, idx, pred["flood_prob"], pred["severity"])
+                save_locations_to_storage(updated)
+                st.success(f"Saved {name} to My Locations")
+                st.rerun()
+
+    tab1, tab2, tab3, tab4, tab5 = st.tabs(
+        ["📊 Dashboard", "🗺️ Neighbourhood", "📈 Details", "📍 My Locations", "ℹ️ About"])
 
     # ══════════ TAB 1: DASHBOARD ══════════
     with tab1:
@@ -1149,8 +1410,13 @@ def main():
                 "Rain (mm)": [f"{r:.1f}" for r in rain_info["rain"]]})
             st.dataframe(rain_df, use_container_width=True, hide_index=True)
 
-    # ══════════ TAB 4: ABOUT ══════════
+    # ══════════ TAB 4: MY LOCATIONS ══════════
     with tab4:
+        render_my_locations_tab(saved_locations, already_saved_idx, model, scaler,
+                                feature_cols, threshold, bucket_map)
+
+    # ══════════ TAB 5: ABOUT ══════════
+    with tab5:
         html("""
         <div class="fg-card">
           <div class="fg-card-label">About FloodGuard</div>
