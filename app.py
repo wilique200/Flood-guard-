@@ -1206,16 +1206,35 @@ def main():
 
     # Saved locations load from the BROWSER on every run — see the
     # first-run "still loading" quirk noted in the storage section above.
+    #
+    # IMPORTANT: this retry is BOUNDED. An earlier version called
+    # st.rerun() unconditionally whenever the value was still None,
+    # which caused a genuine infinite loop (blank screen, script stuck
+    # "running" forever) on at least one real deployment — if the
+    # underlying component never resolves for any reason, there must be
+    # a way out, or the app becomes permanently unusable rather than
+    # just missing one feature.
     saved_locations = load_saved_locations()
     locations_still_loading = saved_locations is None
+
     if locations_still_loading:
-        saved_locations = []
+        retry_count = st.session_state.get("_locations_load_retries", 0)
+        if retry_count < 3:
+            st.session_state["_locations_load_retries"] = retry_count + 1
+            saved_locations = []
+            if not run_analysis or not location_input.strip():
+                st.info("⏳ Loading your saved locations…")
+                st.rerun()
+        else:
+            # Gave up after 3 attempts — proceed with an empty list rather
+            # than hang forever. My Locations simply won't show anything
+            # saved this session; the rest of the app still works normally.
+            saved_locations = []
+    else:
+        st.session_state["_locations_load_retries"] = 0
 
     if not run_analysis or not location_input.strip():
-        if locations_still_loading:
-            st.info("⏳ Loading your saved locations…")
-            st.rerun()
-        elif saved_locations:
+        if saved_locations:
             render_my_locations_landing(saved_locations, model, scaler,
                                         feature_cols, threshold, bucket_map)
         else:
