@@ -1015,9 +1015,27 @@ def render_sidebar():
         <hr style="border-color:#1E2A40;margin-bottom:20px;">
         """)
 
-        location_input = st.text_input("📍 Enter location", placeholder="e.g. Lagos, Nigeria",
-                                        help="City, town, or region name — add state/country for small towns")
-        run_analysis = st.button("🔍 Analyse Flood Risk")
+        location_input = st.text_input(
+            "📍 Enter location", placeholder="e.g. Lagos, Nigeria",
+            help="City, town, or region name — add state/country for small towns",
+            key="location_input_field")
+        button_clicked = st.button("🔍 Analyse Flood Risk")
+
+        # A Streamlit button's return value is True ONLY on the exact run
+        # where it was physically clicked — it resets to False on every
+        # later rerun, even a programmatic one (e.g. st.rerun() after
+        # saving a location). Without this flag, ANY rerun triggered while
+        # viewing a searched location would incorrectly bounce back to
+        # the landing page, since the check downstream relies on
+        # "was the button just clicked" rather than "is there an active
+        # location being viewed." This flag tracks the latter, and persists
+        # across reruns the same button click can't.
+        if button_clicked and location_input.strip():
+            st.session_state["_active_location_query"] = location_input.strip()
+        run_analysis = button_clicked or (
+            "_active_location_query" in st.session_state
+            and location_input.strip() == st.session_state["_active_location_query"]
+        )
 
         st.markdown("<hr style='border-color:#1E2A40;margin:20px 0;'>", unsafe_allow_html=True)
         html("""<div style="font-family:'JetBrains Mono',monospace;font-size:10px;
