@@ -704,7 +704,8 @@ def build_plotly_map(grid_results, user_name):
             marker=dict(size=10, color=color, symbol="square"), name=f"{icon} {label}"))
     fig.update_layout(
         title=dict(text=f"🗺️ Neighbourhood Flood Risk Grid — {user_name}",
-                  font=dict(color="#E2E8F0", size=14, family="JetBrains Mono")),
+                  font=dict(color="#E2E8F0", size=14, family="JetBrains Mono"),
+                  y=0.97, yanchor="top"),
         paper_bgcolor="#0F1623", plot_bgcolor="#141B2D",
         font=dict(color="#E2E8F0", family="Inter"),
         xaxis=dict(title="← West | East →", gridcolor="#1E2A40", zeroline=True,
@@ -712,8 +713,9 @@ def build_plotly_map(grid_results, user_name):
         yaxis=dict(title="← South | North →", gridcolor="#1E2A40", zeroline=True,
                   zerolinecolor="#38BDF8", zerolinewidth=1.5, tickfont=dict(color="#64748B")),
         legend=dict(bgcolor="#0F1623", bordercolor="#1E2A40", borderwidth=1,
-                   font=dict(color="#E2E8F0", size=10), orientation="h", yanchor="bottom", y=1.02),
-        height=480, margin=dict(l=40, r=20, t=80, b=40))
+                   font=dict(color="#E2E8F0", size=10), orientation="h",
+                   yanchor="top", y=-0.18, xanchor="center", x=0.5),
+        height=560, margin=dict(l=40, r=20, t=60, b=90))
     return fig
 
 
@@ -1308,13 +1310,19 @@ def main():
                 pass
         else:
             if st.button("📍 Save Location", key="save_loc_btn"):
-                updated = add_saved_location(saved_locations, name, lat, lon)
-                idx = len(updated) - 1
-                updated = update_saved_location_result(
-                    updated, idx, pred["flood_prob"], pred["severity"])
+                new_record = {
+                    "label": name, "lat": lat, "lon": lon,
+                    "last_prob": pred["flood_prob"], "last_severity": pred["severity"],
+                    "last_checked_at": datetime.utcnow().isoformat(),
+                }
+                updated = list(saved_locations) + [new_record]
                 save_locations_to_storage(updated)
-                st.success(f"Saved {name} to My Locations")
+                st.session_state["_just_saved_location"] = name
                 st.rerun()
+
+    if st.session_state.get("_just_saved_location"):
+        st.success(f"Saved {st.session_state['_just_saved_location']} to My Locations")
+        del st.session_state["_just_saved_location"]
 
     tab1, tab2, tab3, tab4, tab5 = st.tabs(
         ["📊 Dashboard", "🗺️ Neighbourhood", "📈 Details", "📍 My Locations", "ℹ️ About"])
