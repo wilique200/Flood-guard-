@@ -346,33 +346,66 @@ def geocode(location_str):
     with just the first comma-separated segment (e.g. "Itakpe, Kogi
     State, Nigeria" -> "Itakpe") since Open-Meteo's matcher works best
     on the place name itself rather than a full free-text address.
+
+    IMPORTANT: returns ALL meaningfully distinct candidates rather than
+    silently picking the first result. Place names like "Derby" refer
+    to genuinely different real locations (Kansas, Connecticut, New
+    York, and the original Derby in England, among others) — for a
+    flood-risk tool specifically, silently guessing wrong means showing
+    someone irrelevant weather data for a real decision. Two results are
+    treated as "the same place" (collapsed to one) only if they're within
+    ~0.1° of each other AND share country+admin1 — small metadata/
+    naming variants of one true match, not a real ambiguity.
     """
     location_str = location_str.strip()
     url = "https://geocoding-api.open-meteo.com/v1/search"
 
-    candidates = [location_str]
+    candidates_to_try = [location_str]
     first_segment = location_str.split(",")[0].strip()
     if first_segment and first_segment != location_str:
-        candidates.append(first_segment)
+        candidates_to_try.append(first_segment)
 
-    for query in candidates:
+    for query in candidates_to_try:
         try:
-            params = {"name": query, "count": 5, "format": "json"}
+            params = {"name": query, "count": 8, "format": "json"}
             resp = requests.get(url, params=params, timeout=10)
             resp.raise_for_status()
             data = resp.json()
             results = data.get("results")
-            if results:
-                top = results[0]
-                parts = [top.get("name", "")]
-                if top.get("admin1"):
-                    parts.append(top["admin1"])
-                if top.get("country"):
-                    parts.append(top["country"])
-                return {
-                    "lat": float(top["latitude"]), "lon": float(top["longitude"]),
-                    "display_name": ", ".join(p for p in parts if p), "found": True,
-                }
+            if not results:
+                continue
+
+            distinct = []
+            for r in results:
+                is_dup = False
+                for d in distinct:
+                    same_admin = (r.get("country")==d.get("country") and
+                                  r.get("admin1")==d.get("admin1"))
+                    close = (abs(r["latitude"]-d["latitude"])<0.1 and
+                            abs(r["longitude"]-d["longitude"])<0.1)
+                    if same_admin and close:
+                        is_dup = True
+                        break
+                if not is_dup:
+                    distinct.append(r)
+
+            options = []
+            for r in distinct:
+                parts = [r.get("name", "")]
+                if r.get("admin1"):
+                    parts.append(r["admin1"])
+                if r.get("country"):
+                    parts.append(r["country"])
+                options.append({
+                    "lat": float(r["latitude"]), "lon": float(r["longitude"]),
+                    "display_name": ", ".join(p for p in parts if p),
+                })
+
+            if len(options) == 1:
+                return {**options[0], "found": True, "ambiguous": False}
+            else:
+                return {"found": True, "ambiguous": True, "options": options}
+
         except Exception:
             pass
 
@@ -1285,6 +1318,7 @@ def main():
 
     with st.spinner(f"📍 Locating {location_clean}…"):
         geo = geocode(location_clean)
+
     if not geo["found"]:
         st.error(f"❌ Could not find '{location_clean}'.")
         st.markdown(
@@ -1296,8 +1330,33 @@ def main():
         )
         return
 
+    # DISAMBIGUATION: "Derby" genuinely refers to different real places
+    # (Kansas, Connecticut, New York, England, ...) — geocode() now
+    # surfaces every distinct match rather than silently picking one.
+    # The chosen option is remembered per exact query string, so it
+    # survives the rerun that applies the choice, but a different
+    # ambiguous search later still asks again rather than reusing a
+    # stale pick.
+    disambig_key = f"_disambig_choice::{location_clean.lower()}"
+    name = None
+
+    if geo.get("ambiguous"):
+        chosen = st.session_state.get(disambig_key)
+        if chosen is None:
+            st.warning(f"⚠️ '{location_clean}' matches more than one place. Which did you mean?")
+            for i, opt in enumerate(geo["options"]):
+                if st.button(f"📍 {opt['display_name']}", key=f"disambig_opt_{i}"):
+                    st.session_state[disambig_key] = i
+                    st.rerun()
+            return
+        else:
+            chosen_option = geo["options"][chosen]
+            geo = {**chosen_option, "found": True}
+            name = chosen_option["display_name"]
+
     lat, lon = geo["lat"], geo["lon"]
-    name = location_clean.title()
+    if name is None:
+        name = location_clean.title()
 
     with st.spinner("📡 Fetching weather & soil data…"):
         w_data  = fetch_weather_data(lat, lon)
